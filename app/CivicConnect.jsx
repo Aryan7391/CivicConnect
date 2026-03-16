@@ -1065,26 +1065,54 @@ const LoginPage = ({ onNavigate, onLogin }) => {
       const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password: pass });
       if (authError) { setError(authError.message); setLoading(false); return; }
 
-      // Fetch profile
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", data.user.id)
-        .single();
+      const userId = data.user.id;
+      const userEmail = data.user.email;
+      const userName = data.user.user_metadata?.name || userEmail.split("@")[0];
+      const userRole = data.user.user_metadata?.role || role;
 
-      if (!profile) { setError("Profile not found. Please sign up."); setLoading(false); return; }
+      // Try to fetch profile, but don't block login if it fails
+      let profileRole = userRole;
+      let profileName = userName;
+      let approved = true;
+
+      try {
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", userId)
+          .single();
+
+        if (profile) {
+          profileRole = profile.role;
+          profileName = profile.name || userName;
+          approved = profile.approved;
+        } else {
+          // Profile missing — create it
+          await supabase.from("profiles").upsert({
+            id: userId,
+            email: userEmail,
+            name: userName,
+            role: userRole,
+            approved: userRole === "government" ? false : true,
+          });
+          approved = userRole !== "government";
+        }
+      } catch(e) {
+        console.log("Profile fetch error:", e);
+      }
 
       // Block unapproved government accounts
-      if (profile.role === "government" && !profile.approved) {
+      if (profileRole === "government" && !approved) {
         setError("Your government account is pending admin approval. You will receive an email once approved.");
         await supabase.auth.signOut();
         setLoading(false);
         return;
       }
 
-      onLogin({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
+      onLogin({ id: userId, name: profileName, email: userEmail, role: profileRole });
     } catch (e) {
-      setError("Something went wrong. Please try again.");
+      console.error("Login error:", e);
+      setError("Something went wrong: " + e.message);
       setLoading(false);
     }
   };
