@@ -140,10 +140,6 @@ const globalStyles = `
     flex-direction: column;
     transition: transform 0.3s ease;
     overflow-y: auto;
-    transform: translateX(0);
-  }
-  .sidebar.closed {
-    transform: translateX(-260px);
   }
   .sidebar-logo {
     padding: 28px 24px 20px;
@@ -255,10 +251,6 @@ const globalStyles = `
     margin-left: 260px;
     flex: 1;
     min-height: 100vh;
-    transition: margin-left 0.3s ease;
-  }
-  .main-content.expanded {
-    margin-left: 0;
   }
 
   /* Top bar */
@@ -908,7 +900,10 @@ const globalStyles = `
 
   /* Responsive */
   @media (max-width: 900px) {
+    .sidebar { transform: translateX(-260px); }
+    .sidebar.open { transform: translateX(0); }
     .sidebar-overlay.open { display: block; }
+    .main-content { margin-left: 0; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .issue-grid { grid-template-columns: 1fr; }
     .topbar { padding: 0 16px; }
@@ -1070,33 +1065,23 @@ const LoginPage = ({ onNavigate, onLogin }) => {
       const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password: pass });
       if (authError) { setError(authError.message); setLoading(false); return; }
 
-      const userId = data.user.id;
-      const userEmail = data.user.email;
-      const userName = data.user.user_metadata?.name || userEmail.split("@")[0];
-
-      // Fetch profile to check approval status
       const { data: profile } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", userId)
+        .eq("id", data.user.id)
         .single();
 
-      if (profile) {
-        // Block if government or institution and not yet approved
-        if ((profile.role === "government" || profile.role === "institution") && !profile.approved) {
-          setError("Your account is pending admin approval. Please wait for the admin to approve your account.");
-          await supabase.auth.signOut();
-          setLoading(false);
-          return;
-        }
-        // Approved — allow login
-        onLogin({ id: profile.id, name: profile.name || userName, email: profile.email, role: profile.role });
-      } else {
-        // No profile found — use metadata
-        onLogin({ id: userId, name: userName, email: userEmail, role: data.user.user_metadata?.role || "citizen" });
+      if (!profile) { setError("Profile not found. Please sign up."); setLoading(false); return; }
+
+      if ((profile.role === "government" || profile.role === "institution") && !profile.approved) {
+        setError("Your account is pending admin approval.");
+        await supabase.auth.signOut();
+        setLoading(false);
+        return;
       }
+
+      onLogin({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
     } catch (e) {
-      console.error("Login error:", e);
       setError("Something went wrong. Please try again.");
       setLoading(false);
     }
@@ -1188,14 +1173,10 @@ const SignupPage = ({ onNavigate, onLogin }) => {
 
   const handleSignup = async () => {
     if (!name || !email || !pass) { setError("Please fill in all fields."); return; }
-    if (pass.length < 6) { setError("Password must be at least 6 characters."); return; }
     setLoading(true);
     setError("");
     try {
-      // Citizen and volunteer are approved immediately
-      // Government and institution need admin approval
       const needsApproval = role === "government" || role === "institution";
-
       const { data, error: authError } = await supabase.auth.signUp({
         email,
         password: pass,
@@ -1203,8 +1184,7 @@ const SignupPage = ({ onNavigate, onLogin }) => {
       });
       if (authError) { setError(authError.message); setLoading(false); return; }
 
-      // Manually create profile with correct approved status
-      // (trigger may also do this but we ensure it here)
+      // Create profile
       await supabase.from("profiles").upsert({
         id: data.user.id,
         email,
@@ -1215,10 +1195,8 @@ const SignupPage = ({ onNavigate, onLogin }) => {
       });
 
       if (needsApproval) {
-        // Show pending page for govt and institution
         onNavigate("govPending");
       } else {
-        // Citizen and volunteer go straight to feed
         onLogin({ id: data.user.id, name, email, role });
       }
     } catch (e) {
@@ -1397,9 +1375,7 @@ const GovPendingPage = ({ onNavigate }) => (
 
 // ─── MAIN APP LAYOUT ──────────────────────────────────────────────────────────
 const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast }) => {
-  const [sidebarOpen, setSidebarOpen] = useState(
-    typeof window !== "undefined" ? window.innerWidth > 900 : true
-  );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const navItems = [
     { id:"feed", label:"Community Feed", icon:"home" },
@@ -1425,7 +1401,7 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
       {/* Sidebar overlay for mobile */}
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-      <aside className={`sidebar ${!sidebarOpen ? "closed" : ""}`}>
+      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-logo">
           <div className="logo-mark">
             <div className="logo-icon">🏙️</div>
@@ -1460,7 +1436,7 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
         </div>
       </aside>
 
-      <main className={`main-content ${!sidebarOpen ? "expanded" : ""}`}>
+      <main className="main-content">
         <header className="topbar">
           <div style={{display:"flex", alignItems:"center", gap:12}}>
             <div className="topbar-title">{pageTitles[page] || "CivicConnect"}</div>
@@ -1470,18 +1446,6 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
             <div style={{width:36, height:36, borderRadius:"50%", background: roleColor + "22", color: roleColor, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:600}}>
               {initials}
             </div>
-            <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              style={{
-                background:"none", border:"1.5px solid #e2e8f0", cursor:"pointer",
-                borderRadius:8, padding:"7px 9px", display:"flex", alignItems:"center",
-                justifyContent:"center", transition:"all 0.15s",
-                backgroundColor: sidebarOpen ? "#f1f5f9" : "white"
-              }}
-              title="Toggle menu"
-            >
-              <Icon name="menu" size={20} color="#334155" />
-            </button>
           </div>
         </header>
 
@@ -2327,35 +2291,14 @@ export default function App() {
   useEffect(() => {
     const loadUser = async (session) => {
       if (!session) return;
-
-      try {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
-
-        if (profile) {
-          // Block unapproved govt or institution — they should not stay logged in
-          if ((profile.role === "government" || profile.role === "institution") && !profile.approved) {
-            await supabase.auth.signOut();
-            return;
-          }
-          setUser({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
-          setPage("feed");
-        } else {
-          // Fallback to session metadata
-          const u = session.user;
-          setUser({
-            id: u.id,
-            name: u.user_metadata?.name || u.email.split("@")[0],
-            email: u.email,
-            role: u.user_metadata?.role || "citizen",
-          });
-          setPage("feed");
-        }
-      } catch(e) {
-        console.log("Session restore error:", e);
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .single();
+      if (profile && !((profile.role === "government" || profile.role === "institution") && !profile.approved)) {
+        setUser({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
+        setPage("feed");
       }
     };
 
