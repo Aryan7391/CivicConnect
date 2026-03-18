@@ -2314,36 +2314,15 @@ export default function App() {
   useEffect(() => {
     const loadUser = async (session) => {
       if (!session) return;
-
-      // Fallback user data from session metadata
-      const fallbackUser = {
-        id: session.user.id,
-        email: session.user.email,
-        name: session.user.user_metadata?.name || session.user.email.split("@")[0],
-        role: session.user.user_metadata?.role || "citizen",
-      };
-
-      try {
-        const { data: profile, error } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
-
-        if (profile) {
-          // Block unapproved government
-          if (profile.role === "government" && !profile.approved) return;
-          setUser({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
-        } else {
-          // Profile fetch failed — use metadata fallback
-          console.log("Profile fetch failed, using fallback:", error?.message);
-          setUser(fallbackUser);
-        }
-      } catch(e) {
-        // Any error — use fallback
-        setUser(fallbackUser);
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .single();
+      if (profile && !(profile.role === "government" && !profile.approved)) {
+        setUser({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
+        setPage("feed");
       }
-      setPage("feed");
     };
 
     // Check existing session on mount
