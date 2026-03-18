@@ -1068,51 +1068,31 @@ const LoginPage = ({ onNavigate, onLogin }) => {
       const userId = data.user.id;
       const userEmail = data.user.email;
       const userName = data.user.user_metadata?.name || userEmail.split("@")[0];
-      const userRole = data.user.user_metadata?.role || role;
 
-      // Try to fetch profile, but don't block login if it fails
-      let profileRole = userRole;
-      let profileName = userName;
-      let approved = true;
+      // Fetch profile to check approval status
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", userId)
+        .single();
 
-      try {
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", userId)
-          .single();
-
-        if (profile) {
-          profileRole = profile.role;
-          profileName = profile.name || userName;
-          approved = profile.approved;
-        } else {
-          // Profile missing — create it
-          await supabase.from("profiles").upsert({
-            id: userId,
-            email: userEmail,
-            name: userName,
-            role: userRole,
-            approved: userRole === "government" ? false : true,
-          });
-          approved = userRole !== "government";
+      if (profile) {
+        // Block if government or institution and not yet approved
+        if ((profile.role === "government" || profile.role === "institution") && !profile.approved) {
+          setError("Your account is pending admin approval. Please wait for the admin to approve your account.");
+          await supabase.auth.signOut();
+          setLoading(false);
+          return;
         }
-      } catch(e) {
-        console.log("Profile fetch error:", e);
+        // Approved — allow login
+        onLogin({ id: profile.id, name: profile.name || userName, email: profile.email, role: profile.role });
+      } else {
+        // No profile found — use metadata
+        onLogin({ id: userId, name: userName, email: userEmail, role: data.user.user_metadata?.role || "citizen" });
       }
-
-      // Block unapproved government accounts
-      if (profileRole === "government" && !approved) {
-        setError("Your government account is pending admin approval. You will receive an email once approved.");
-        await supabase.auth.signOut();
-        setLoading(false);
-        return;
-      }
-
-      onLogin({ id: userId, name: profileName, email: userEmail, role: profileRole });
     } catch (e) {
       console.error("Login error:", e);
-      setError("Something went wrong: " + e.message);
+      setError("Something went wrong. Please try again.");
       setLoading(false);
     }
   };
@@ -1203,9 +1183,14 @@ const SignupPage = ({ onNavigate, onLogin }) => {
 
   const handleSignup = async () => {
     if (!name || !email || !pass) { setError("Please fill in all fields."); return; }
+    if (pass.length < 6) { setError("Password must be at least 6 characters."); return; }
     setLoading(true);
     setError("");
     try {
+      // Citizen and volunteer are approved immediately
+      // Government and institution need admin approval
+      const needsApproval = role === "government" || role === "institution";
+
       const { data, error: authError } = await supabase.auth.signUp({
         email,
         password: pass,
@@ -1213,10 +1198,22 @@ const SignupPage = ({ onNavigate, onLogin }) => {
       });
       if (authError) { setError(authError.message); setLoading(false); return; }
 
-      if (role === "government") {
-        // Don't auto-login — wait for admin approval email
+      // Manually create profile with correct approved status
+      // (trigger may also do this but we ensure it here)
+      await supabase.from("profiles").upsert({
+        id: data.user.id,
+        email,
+        name,
+        role,
+        location,
+        approved: !needsApproval,
+      });
+
+      if (needsApproval) {
+        // Show pending page for govt and institution
         onNavigate("govPending");
       } else {
+        // Citizen and volunteer go straight to feed
         onLogin({ id: data.user.id, name, email, role });
       }
     } catch (e) {
@@ -1375,7 +1372,7 @@ const GovPendingPage = ({ onNavigate }) => (
       </div>
       <div className="notice notice-warning" style={{textAlign:"left", marginBottom:24}}>
         ⭐ <strong>Admin Review Required</strong><br/>
-        Government accounts are manually reviewed for verification. The admin will receive an email notification and approve your account. You will be notified by email once approved.
+        Government and Institution accounts are manually reviewed. The admin will approve your account by updating the database. Once approved you can log in normally with your email and password.
       </div>
       <div style={{background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:10, padding:16, marginBottom:24, textAlign:"left"}}>
         <div style={{fontSize:13, fontWeight:600, color:"#0f2044", marginBottom:8}}>What happens next?</div>
@@ -2314,14 +2311,35 @@ export default function App() {
   useEffect(() => {
     const loadUser = async (session) => {
       if (!session) return;
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
-      if (profile && !(profile.role === "government" && !profile.approved)) {
-        setUser({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
-        setPage("feed");
+
+      try {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single();
+
+        if (profile) {
+          // Block unapproved govt or institution — they should not stay logged in
+          if ((profile.role === "government" || profile.role === "institution") && !profile.approved) {
+            await supabase.auth.signOut();
+            return;
+          }
+          setUser({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
+          setPage("feed");
+        } else {
+          // Fallback to session metadata
+          const u = session.user;
+          setUser({
+            id: u.id,
+            name: u.user_metadata?.name || u.email.split("@")[0],
+            email: u.email,
+            role: u.user_metadata?.role || "citizen",
+          });
+          setPage("feed");
+        }
+      } catch(e) {
+        console.log("Session restore error:", e);
       }
     };
 
