@@ -140,6 +140,10 @@ const globalStyles = `
     flex-direction: column;
     transition: transform 0.3s ease;
     overflow-y: auto;
+    transform: translateX(0);
+  }
+  .sidebar.closed {
+    transform: translateX(-260px);
   }
   .sidebar-logo {
     padding: 28px 24px 20px;
@@ -251,6 +255,10 @@ const globalStyles = `
     margin-left: 260px;
     flex: 1;
     min-height: 100vh;
+    transition: margin-left 0.3s ease;
+  }
+  .main-content.expanded {
+    margin-left: 0;
   }
 
   /* Top bar */
@@ -900,10 +908,7 @@ const globalStyles = `
 
   /* Responsive */
   @media (max-width: 900px) {
-    .sidebar { transform: translateX(-260px); }
-    .sidebar.open { transform: translateX(0); }
     .sidebar-overlay.open { display: block; }
-    .main-content { margin-left: 0; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .issue-grid { grid-template-columns: 1fr; }
     .topbar { padding: 0 16px; }
@@ -1392,7 +1397,9 @@ const GovPendingPage = ({ onNavigate }) => (
 
 // ─── MAIN APP LAYOUT ──────────────────────────────────────────────────────────
 const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast }) => {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    typeof window !== "undefined" ? window.innerWidth > 900 : true
+  );
 
   const navItems = [
     { id:"feed", label:"Community Feed", icon:"home" },
@@ -1418,7 +1425,7 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
       {/* Sidebar overlay for mobile */}
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+      <aside className={`sidebar ${!sidebarOpen ? "closed" : ""}`}>
         <div className="sidebar-logo">
           <div className="logo-mark">
             <div className="logo-icon">🏙️</div>
@@ -1453,12 +1460,9 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
         </div>
       </aside>
 
-      <main className="main-content">
+      <main className={`main-content ${!sidebarOpen ? "expanded" : ""}`}>
         <header className="topbar">
           <div style={{display:"flex", alignItems:"center", gap:12}}>
-            <button style={{background:"none", border:"none", cursor:"pointer", display:"none"}} className="mobile-menu-btn" onClick={() => setSidebarOpen(true)}>
-              <Icon name="menu" size={20} color="#334155" />
-            </button>
             <div className="topbar-title">{pageTitles[page] || "CivicConnect"}</div>
           </div>
           <div className="topbar-actions">
@@ -1466,6 +1470,18 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
             <div style={{width:36, height:36, borderRadius:"50%", background: roleColor + "22", color: roleColor, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:600}}>
               {initials}
             </div>
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              style={{
+                background:"none", border:"1.5px solid #e2e8f0", cursor:"pointer",
+                borderRadius:8, padding:"7px 9px", display:"flex", alignItems:"center",
+                justifyContent:"center", transition:"all 0.15s",
+                backgroundColor: sidebarOpen ? "#f1f5f9" : "white"
+              }}
+              title="Toggle menu"
+            >
+              <Icon name="menu" size={20} color="#334155" />
+            </button>
           </div>
         </header>
 
