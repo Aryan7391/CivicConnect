@@ -141,6 +141,9 @@ const globalStyles = `
     transition: transform 0.3s ease;
     overflow-y: auto;
   }
+  .sidebar-hidden {
+    transform: translateX(-260px);
+  }
   .sidebar-logo {
     padding: 28px 24px 20px;
     border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -1061,30 +1064,24 @@ const LoginPage = ({ onNavigate, onLogin }) => {
     if (!email || !pass) { setError("Please fill in all fields."); return; }
     setLoading(true);
     setError("");
+    const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password: pass });
+    if (authError) {
+      setError(authError.message);
+      setLoading(false);
+      return;
+    }
+    // onAuthStateChange in App will handle navigation
+    // Just check approval here
     try {
-      const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password: pass });
-      if (authError) { setError(authError.message); setLoading(false); return; }
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", data.user.id)
-        .single();
-
-      if (!profile) { setError("Profile not found. Please sign up."); setLoading(false); return; }
-
-      if ((profile.role === "government" || profile.role === "institution") && !profile.approved) {
-        setError("Your account is pending admin approval.");
+      const { data: profile } = await supabase.from("profiles").select("role,approved,name").eq("id", data.user.id).single();
+      if (profile && (profile.role === "government" || profile.role === "institution") && !profile.approved) {
+        setError("Your account is pending admin approval. Contact the admin to get approved.");
         await supabase.auth.signOut();
         setLoading(false);
         return;
       }
-
-      onLogin({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
-    } catch (e) {
-      setError("Something went wrong. Please try again.");
-      setLoading(false);
-    }
+    } catch(e) { /* ignore profile fetch errors, let session handle it */ }
+    setLoading(false);
   };
 
   return (
@@ -1375,7 +1372,7 @@ const GovPendingPage = ({ onNavigate }) => (
 
 // ─── MAIN APP LAYOUT ──────────────────────────────────────────────────────────
 const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast }) => {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const navItems = [
     { id:"feed", label:"Community Feed", icon:"home" },
@@ -1401,7 +1398,7 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
       {/* Sidebar overlay for mobile */}
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+      <aside className={`sidebar ${sidebarOpen ? "" : "sidebar-hidden"}`}>
         <div className="sidebar-logo">
           <div className="logo-mark">
             <div className="logo-icon">🏙️</div>
@@ -1436,7 +1433,7 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
         </div>
       </aside>
 
-      <main className="main-content">
+      <main className="main-content" style={{marginLeft: sidebarOpen ? "260px" : "0", transition:"margin-left 0.3s ease"}}>
         <header className="topbar">
           <div style={{display:"flex", alignItems:"center", gap:12}}>
             <div className="topbar-title">{pageTitles[page] || "CivicConnect"}</div>
@@ -1446,6 +1443,19 @@ const AppLayout = ({ user, page, onNavigate, onLogout, children, toast, setToast
             <div style={{width:36, height:36, borderRadius:"50%", background: roleColor + "22", color: roleColor, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:600}}>
               {initials}
             </div>
+            <button
+              onClick={() => setSidebarOpen(o => !o)}
+              title={sidebarOpen ? "Close menu" : "Open menu"}
+              style={{
+                background: sidebarOpen ? "#f1f5f9" : "white",
+                border:"1.5px solid #e2e8f0", borderRadius:8,
+                padding:"7px 9px", cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                transition:"all 0.15s"
+              }}
+            >
+              <Icon name="menu" size={20} color="#334155" />
+            </button>
           </div>
         </header>
 
@@ -2291,23 +2301,36 @@ export default function App() {
   useEffect(() => {
     const loadUser = async (session) => {
       if (!session) return;
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
-      if (profile && !((profile.role === "government" || profile.role === "institution") && !profile.approved)) {
-        setUser({ id: profile.id, name: profile.name, email: profile.email, role: profile.role });
-        setPage("feed");
+      const u = session.user;
+      // Always build a fallback from session metadata
+      const fallback = {
+        id: u.id,
+        email: u.email,
+        name: u.user_metadata?.name || u.email.split("@")[0],
+        role: u.user_metadata?.role || "citizen",
+      };
+      try {
+        const { data: profile } = await supabase
+          .from("profiles").select("*").eq("id", u.id).single();
+        if (profile) {
+          // Block unapproved govt/institution
+          if ((profile.role === "government" || profile.role === "institution") && !profile.approved) {
+            await supabase.auth.signOut();
+            return;
+          }
+          setUser({ id: profile.id, name: profile.name || fallback.name, email: profile.email, role: profile.role });
+        } else {
+          setUser(fallback);
+        }
+      } catch(e) {
+        // Profile fetch failed — use fallback so user is never stuck
+        setUser(fallback);
       }
+      setPage("feed");
     };
 
-    // Check existing session on mount
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      loadUser(session);
-    });
+    supabase.auth.getSession().then(({ data: { session } }) => { loadUser(session); });
 
-    // Listen for auth changes (login, logout, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
         await loadUser(session);
